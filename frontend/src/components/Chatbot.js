@@ -7,7 +7,12 @@ import { useApp } from '@/context/AppContext';
 export default function Chatbot() {
   const { API_BASE_URL } = useApp();
   const [isOpen, setIsOpen] = useState(false);
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState(() => [
+    {
+      role: 'model',
+      content: 'Hello! Welcome to **The Courtyard AI Concierge**. I can help you with court bookings, coaching programs, membership details, tournaments, or club timings. What would you like to know today?'
+    }
+  ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   
@@ -28,18 +33,6 @@ export default function Chatbot() {
   useEffect(() => {
     scrollToBottom();
   }, [messages, loading]);
-
-  // Handle open welcome message
-  useEffect(() => {
-    if (isOpen && messages.length === 0) {
-      setMessages([
-        {
-          role: 'model',
-          content: 'Hello! Welcome to **The Courtyard AI Concierge**. I can help you with court bookings, coaching programs, membership details, tournaments, or club timings. What would you like to know today?'
-        }
-      ]);
-    }
-  }, [isOpen]);
 
   const handleSend = async (textToSend) => {
     const messageText = textToSend || input;

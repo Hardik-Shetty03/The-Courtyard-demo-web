@@ -23,7 +23,18 @@ const DEFAULT_ADMIN_NAME = process.env.DEFAULT_ADMIN_NAME || 'Courtyard Admin';
 const seed = async () => {
   try {
     console.log('🔄 Connecting to MongoDB Atlas for seeding...');
-    await mongoose.connect(MONGO_URI);
+    try {
+      await mongoose.connect(MONGO_URI);
+    } catch (err) {
+      console.error('\n❌ MongoDB Connection Failed:', err.message);
+      console.error('==================================================');
+      console.error('Troubleshooting Guide:');
+      console.error('1. Check if MongoDB is running locally (e.g. net start MongoDB).');
+      console.error('2. Verify MONGODB_URI in your .env file is correct.');
+      console.error('3. If using MongoDB Atlas, check your internet connection and IP Whitelist settings.');
+      console.error('==================================================\n');
+      throw err;
+    }
     console.log('✅ Connected.');
 
     // 1. Clean Database
@@ -180,7 +191,8 @@ const seed = async () => {
       password: hashedAdminPassword,
       role: 'admin',
       membership: 'Elite',
-      membershipExpiry: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+      membershipExpiry: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      walletBalance: 5000
     });
     await admin.save();
 
@@ -190,7 +202,8 @@ const seed = async () => {
       password: hashedUserPassword,
       role: 'user',
       membership: 'Pro',
-      membershipExpiry: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+      membershipExpiry: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      walletBalance: 5000
     });
     await userPratham.save();
 

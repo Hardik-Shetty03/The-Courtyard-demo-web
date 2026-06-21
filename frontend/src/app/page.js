@@ -135,7 +135,7 @@ export default function Home() {
           </h1>
 
           <p className="text-gray-300 max-w-2xl text-base sm:text-xl leading-relaxed mb-10 tracking-wide">
-            Step onto pristine glass cushion surfaces, enjoy elite professional coaching, unlock global membership perks, and join Mangaluru's ultimate pickleball community.
+            Step onto pristine glass cushion surfaces, enjoy elite professional coaching, unlock global membership perks, and join Mangaluru&apos;s ultimate pickleball community.
           </p>
 
           <div className="flex flex-col sm:flex-row gap-5 w-full sm:w-auto mb-16">

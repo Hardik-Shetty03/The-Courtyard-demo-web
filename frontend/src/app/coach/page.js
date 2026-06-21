@@ -1,6 +1,5 @@
-// C:\Users\raipr\.gemini\antigravity\scratch\the-courtyard\frontend\src\app\coach\page.js
 'use client';
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/context/AppContext';
 import { Navbar, BottomNav, Footer } from '@/components/Navigation';
@@ -34,8 +33,7 @@ export default function CoachPortal() {
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [isEvalOpen, setIsEvalOpen] = useState(false);
   
-  // Progress Form State
-  const [evalDate, setEvalDate] = useState(new Date().toISOString().split('T')[0]);
+  const [evalDate, setEvalDate] = useState('2026-06-21');
   const [evalRemarks, setEvalRemarks] = useState('');
   const [skills, setSkills] = useState({
     footwork: 3,
@@ -46,7 +44,7 @@ export default function CoachPortal() {
   });
   const [submittingEval, setSubmittingEval] = useState(false);
 
-  async function fetchCoachData() {
+  const fetchCoachData = useCallback(async () => {
     if (!token) return;
     setLoading(true);
     try {
@@ -69,17 +67,18 @@ export default function CoachPortal() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [token, API_BASE_URL, showToast]);
 
   useEffect(() => {
+    setEvalDate(new Date().toISOString().split('T')[0]);
     if (!token && !loading) {
       router.push('/auth');
     } else if (user && user.role !== 'coach' && user.role !== 'admin') {
       router.push('/dashboard');
     } else {
-      fetchCoachData();
+      setTimeout(() => { fetchCoachData(); }, 0);
     }
-  }, [token, user, router]);
+  }, [token, user, router, fetchCoachData, loading]);
 
   const handleOpenEval = (student) => {
     setSelectedStudent(student);
@@ -142,7 +141,7 @@ export default function CoachPortal() {
 
       // Refresh the selected student view
       if (selectedStudent) {
-        const updatedStudent = data.enrollment || selectedStudent;
+        const updatedStudent = { ...(data.enrollment || selectedStudent) };
         // Re-populate user details as the populated response may just be raw MongoDB IDs
         const found = enrollments.find(e => e._id === selectedStudent._id);
         if (found) {

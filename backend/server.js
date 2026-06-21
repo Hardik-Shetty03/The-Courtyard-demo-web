@@ -278,7 +278,7 @@ const deliverOtp = async (email, otp, contextLabel) => {
   try {
     emailSent = await sendOtpEmail(email, otp);
   } catch (error) {
-    console.error('SendPulse OTP email error:', error.message);
+    console.error('OTP email delivery error:', error.message);
   }
 
   console.log('\n=========================================');
@@ -658,6 +658,34 @@ app.get('/api/courts/availability', async (req, res) => {
 });
 
 // ==========================================
+// TRANSACTION UTILITY
+// ==========================================
+const executeTransaction = async (operationsFn) => {
+  const session = await mongoose.startSession();
+  try {
+    session.startTransaction();
+    const result = await operationsFn(session);
+    await session.commitTransaction();
+    return result;
+  } catch (err) {
+    if (session.inTransaction()) await session.abortTransaction();
+    // Catch replica set / transaction support errors to fallback for standalone MongoDB instances
+    if (
+      err.message.includes('replica set') ||
+      err.codeName === 'TransactionOutcomeError' ||
+      err.code === 20 ||
+      err.message.includes('transaction')
+    ) {
+      console.warn('⚠️ MongoDB Transaction failed because transactions are not supported by the database engine (e.g. standalone instance). Falling back to non-transactional execution.');
+      return await operationsFn(null);
+    }
+    throw err;
+  } finally {
+    session.endSession();
+  }
+};
+
+// ==========================================
 // COURT BOOKING ROUTES
 // ==========================================
 app.post('/api/bookings', authenticateToken, async (req, res) => {
@@ -675,102 +703,109 @@ app.post('/api/bookings', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Cannot book past or in-progress slots for today' });
     }
 
-    const court = await Court.findById(courtId);
-    if (!court || !court.isActive) {
-      return res.status(404).json({ error: 'Court is not available' });
-    }
-
-    // Check if slots are already booked
-    const existingBookings = await Booking.find({ court: courtId, date, status: 'confirmed' });
-    let alreadyBooked = [];
-    existingBookings.forEach(eb => {
-      alreadyBooked = alreadyBooked.concat(eb.slots);
-    });
-
-    const isOverlap = slots.some(slot => alreadyBooked.includes(slot));
-    if (isOverlap) {
-      return res.status(400).json({ error: 'One or more of the selected slots are already booked' });
-    }
-
-    const user = await User.findById(req.user.id);
-    
-    // Pricing engine: Peak hours are 6:00 AM - 9:00 AM and 5:00 PM - 10:00 PM (slots: 6, 7, 8, 17, 18, 19, 20, 21)
-    let total = 0;
-    slots.forEach(slot => {
-      const isPeak = (slot >= 6 && slot < 9) || (slot >= 17 && slot < 22);
-      total += isPeak ? court.peakPrice : court.basePrice;
-    });
-
-    // Discount Engine based on membership
-    let discount = 0;
-    if (user.membership === 'Basic') discount = 0.10; // 10%
-    else if (user.membership === 'Pro') discount = 0.25; // 25%
-    else if (user.membership === 'Elite') discount = 1.00; // 100% Free!
-
-    const discountAmount = total * discount;
-    const finalAmount = total - discountAmount;
-
-    let walletDeduction = 0;
-    if (req.body.useWallet) {
-      walletDeduction = Math.min(user.walletBalance || 0, finalAmount);
-      user.walletBalance = (user.walletBalance || 0) - walletDeduction;
-      await user.save();
-
-      if (walletDeduction > 0) {
-        const walletTx = new WalletTransaction({
-          user: user._id,
-          amount: -walletDeduction,
-          type: 'court_booking',
-          description: `Split Payment for Court Booking (Wallet portion)`,
-          paymentMethod: 'wallet',
-          processedBy: user._id
-        });
-        await walletTx.save();
+    const bookingResult = await executeTransaction(async (session) => {
+      const court = await Court.findById(courtId).session(session);
+      if (!court || !court.isActive) {
+        throw new Error('Court is not available');
       }
-    }
 
-    const booking = new Booking({
-      user: user._id,
-      court: courtId,
-      date,
-      slots,
-      totalAmount: finalAmount,
-      status: 'confirmed',
-      paymentId: walletDeduction > 0 
-        ? (finalAmount > walletDeduction ? `SPLIT-W${walletDeduction}-${paymentId || `MOCK-${Date.now()}`}` : `WALLET-FULL-${Date.now()}`)
-        : (paymentId || `MOCK-PAY-${Date.now()}`)
+      // Check if slots are already booked
+      const existingBookings = await Booking.find({ court: courtId, date, status: 'confirmed' }).session(session);
+      let alreadyBooked = [];
+      existingBookings.forEach(eb => {
+        alreadyBooked = alreadyBooked.concat(eb.slots);
+      });
+
+      const isOverlap = slots.some(slot => alreadyBooked.includes(slot));
+      if (isOverlap) {
+        throw new Error('One or more of the selected slots are already booked');
+      }
+
+      const user = await User.findById(req.user.id).session(session);
+      if (!user) {
+        throw new Error('User not found');
+      }
+      
+      // Pricing engine: Peak hours are 6:00 AM - 9:00 AM and 5:00 PM - 10:00 PM
+      let total = 0;
+      slots.forEach(slot => {
+        const isPeak = (slot >= 6 && slot < 9) || (slot >= 17 && slot < 22);
+        total += isPeak ? court.peakPrice : court.basePrice;
+      });
+
+      // Discount Engine based on membership
+      let discount = 0;
+      if (user.membership === 'Basic') discount = 0.10;
+      else if (user.membership === 'Pro') discount = 0.25;
+      else if (user.membership === 'Elite') discount = 1.00;
+
+      const discountAmount = total * discount;
+      const finalAmount = total - discountAmount;
+
+      let walletDeduction = 0;
+      if (req.body.useWallet) {
+        walletDeduction = Math.min(user.walletBalance || 0, finalAmount);
+        user.walletBalance = (user.walletBalance || 0) - walletDeduction;
+        await user.save({ session });
+
+        if (walletDeduction > 0) {
+          const walletTx = new WalletTransaction({
+            user: user._id,
+            amount: -walletDeduction,
+            type: 'court_booking',
+            description: `Split Payment for Court Booking (Wallet portion)`,
+            paymentMethod: 'wallet',
+            processedBy: user._id
+          });
+          await walletTx.save({ session });
+        }
+      }
+
+      const booking = new Booking({
+        user: user._id,
+        court: courtId,
+        date,
+        slots,
+        totalAmount: finalAmount,
+        status: 'confirmed',
+        paymentId: walletDeduction > 0 
+          ? (finalAmount > walletDeduction ? `SPLIT-W${walletDeduction}-${paymentId || `MOCK-${Date.now()}`}` : `WALLET-FULL-${Date.now()}`)
+          : (paymentId || `MOCK-PAY-${Date.now()}`)
+      });
+      
+      booking.qrCodeData = booking._id.toString();
+      await booking.save({ session });
+
+      // Create payment entry
+      const payment = new Payment({
+        user: user._id,
+        amount: finalAmount,
+        type: 'Court Booking',
+        referenceId: booking._id,
+        razorpayPaymentId: paymentId || `MOCK-PAY-${Date.now()}`,
+        status: 'success'
+      });
+      await payment.save({ session });
+
+      // User notification
+      const bookingNotif = new Notification({
+        title: 'Court Booking Confirmed',
+        message: `Your booking for ${court.name} on ${date} at ${slots.map(s => `${s}:00`).join(', ')} is confirmed. QR check-in ready!`,
+        type: 'booking',
+        user: user._id
+      });
+      await bookingNotif.save({ session });
+
+      return booking;
     });
-    
-    // Set QR code data to the actual database ID of the booking
-    booking.qrCodeData = booking._id.toString();
-    await booking.save();
 
-    // Create payment entry
-    const payment = new Payment({
-      user: user._id,
-      amount: finalAmount,
-      type: 'Court Booking',
-      referenceId: booking._id,
-      razorpayPaymentId: paymentId || `MOCK-PAY-${Date.now()}`,
-      status: 'success'
-    });
-    await payment.save();
-
-    // User notification
-    const bookingNotif = new Notification({
-      title: 'Court Booking Confirmed',
-      message: `Your booking for ${court.name} on ${date} at ${slots.map(s => `${s}:00`).join(', ')} is confirmed. QR check-in ready!`,
-      type: 'booking',
-      user: user._id
-    });
-    await bookingNotif.save();
-
-    res.status(201).json({ message: 'Booking successful', booking });
+    res.status(201).json({ message: 'Booking successful', booking: bookingResult });
   } catch (error) {
     console.log('BOOKING ERROR:', error);
-    res.status(500).json({ error: 'Failed to create booking' });
+    res.status(500).json({ error: error.message || 'Failed to create booking' });
   }
 });
+
 
 app.get('/api/bookings/my', authenticateToken, async (req, res) => {
   try {
@@ -905,93 +940,104 @@ app.post('/api/coaching/enroll', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Course ID is required' });
     }
 
-    const course = await Course.findById(courseId).populate('coach');
-    if (!course) return res.status(404).json({ error: 'Coaching course not found' });
-
-    // Check capacity
-    if (course.slotsEnrolled >= course.slotsTotal) {
-      return res.status(400).json({ error: 'This course is fully enrolled!' });
-    }
-
-    // Check if user is already enrolled
-    const existingEnrollment = await Enrollment.findOne({ user: req.user.id, course: courseId, status: 'active' });
-    if (existingEnrollment) {
-      return res.status(400).json({ error: 'You are already enrolled in this coaching course!' });
-    }
-
-    const user = await User.findById(req.user.id);
-    let amount = course.price;
-
-    // Apply coaching discount if user is Pro (10%) or Elite (20%)
-    if (user.membership === 'Pro') amount = amount * 0.90;
-    else if (user.membership === 'Elite') amount = amount * 0.80;
-
-    let walletDeduction = 0;
-    if (req.body.useWallet) {
-      walletDeduction = Math.min(user.walletBalance || 0, amount);
-      user.walletBalance = (user.walletBalance || 0) - walletDeduction;
-      await user.save();
-
-      if (walletDeduction > 0) {
-        const walletTx = new WalletTransaction({
-          user: user._id,
-          amount: -walletDeduction,
-          type: 'coaching_enrollment',
-          description: `Split Payment for Academy Enrollment (Wallet portion)`,
-          paymentMethod: 'wallet',
-          processedBy: user._id
-        });
-        await walletTx.save();
+    const enrollmentResult = await executeTransaction(async (session) => {
+      const course = await Course.findById(courseId).populate('coach').session(session);
+      if (!course) {
+        throw new Error('Coaching course not found');
       }
-    }
 
-    const finalPaymentId = walletDeduction > 0 
-      ? (amount > walletDeduction ? `SPLIT-W${walletDeduction}-${req.body.paymentId || `MOCK-${Date.now()}`}` : `WALLET-FULL-${Date.now()}`)
-      : (req.body.paymentId || `ENROLL-PAY-${Date.now()}`);
+      // Check capacity
+      if (course.slotsEnrolled >= course.slotsTotal) {
+        throw new Error('This course is fully enrolled!');
+      }
 
-    const qrCodeData = `CY-ENROLL-${courseId}-${user._id}`;
+      // Check if user is already enrolled
+      const existingEnrollment = await Enrollment.findOne({ user: req.user.id, course: courseId, status: 'active' }).session(session);
+      if (existingEnrollment) {
+        throw new Error('You are already enrolled in this coaching course!');
+      }
 
-    const enrollment = new Enrollment({
-      user: user._id,
-      course: courseId,
-      amountPaid: amount,
-      paymentId: finalPaymentId,
-      qrCodeData,
-      status: 'active',
-      attendance: []
+      const user = await User.findById(req.user.id).session(session);
+      if (!user) {
+        throw new Error('User not found');
+      }
+
+      let amount = course.price;
+
+      // Apply coaching discount if user is Pro (10%) or Elite (20%)
+      if (user.membership === 'Pro') amount = amount * 0.90;
+      else if (user.membership === 'Elite') amount = amount * 0.80;
+
+      let walletDeduction = 0;
+      if (req.body.useWallet) {
+        walletDeduction = Math.min(user.walletBalance || 0, amount);
+        user.walletBalance = (user.walletBalance || 0) - walletDeduction;
+        await user.save({ session });
+
+        if (walletDeduction > 0) {
+          const walletTx = new WalletTransaction({
+            user: user._id,
+            amount: -walletDeduction,
+            type: 'coaching_enrollment',
+            description: `Split Payment for Academy Enrollment (Wallet portion)`,
+            paymentMethod: 'wallet',
+            processedBy: user._id
+          });
+          await walletTx.save({ session });
+        }
+      }
+
+      const finalPaymentId = walletDeduction > 0 
+        ? (amount > walletDeduction ? `SPLIT-W${walletDeduction}-${req.body.paymentId || `MOCK-${Date.now()}`}` : `WALLET-FULL-${Date.now()}`)
+        : (req.body.paymentId || `ENROLL-PAY-${Date.now()}`);
+
+      const qrCodeData = `CY-ENROLL-${courseId}-${user._id}`;
+
+      const enrollment = new Enrollment({
+        user: user._id,
+        course: courseId,
+        amountPaid: amount,
+        paymentId: finalPaymentId,
+        qrCodeData,
+        status: 'active',
+        attendance: []
+      });
+      await enrollment.save({ session });
+
+      // Increment course capacity
+      course.slotsEnrolled += 1;
+      await course.save({ session });
+
+      // Log payment transaction
+      const payment = new Payment({
+        user: user._id,
+        amount,
+        type: 'Coaching Course',
+        referenceId: enrollment._id,
+        status: 'success',
+        razorpayPaymentId: finalPaymentId
+      });
+      await payment.save({ session });
+
+      // Send notification
+      const enrollNotif = new Notification({
+        title: 'Course Enrollment Confirmed!',
+        message: `You have successfully enrolled in "${course.title}". Schedule: ${course.schedule}. Coach: ${course.coach?.name || 'Assigned soon'}. Get ready!`,
+        type: 'booking',
+        user: user._id
+      });
+      await enrollNotif.save({ session });
+
+      return { enrollment, course };
     });
-    await enrollment.save();
 
-    // Increment course capacity
-    course.slotsEnrolled += 1;
-    await course.save();
-
-    // Log payment transaction
-    const payment = new Payment({
-      user: user._id,
-      amount,
-      type: 'Coaching Course',
-      referenceId: enrollment._id,
-      status: 'success',
-      razorpayPaymentId: finalPaymentId
-    });
-    await payment.save();
-
-    // Send notification
-    const enrollNotif = new Notification({
-      title: 'Course Enrollment Confirmed!',
-      message: `You have successfully enrolled in "${course.title}". Schedule: ${course.schedule}. Coach: ${course.coach?.name || 'Assigned soon'}. Get ready!`,
-      type: 'booking',
-      user: user._id
-    });
-    await enrollNotif.save();
-
-    res.status(201).json({ message: 'Course enrollment successful!', enrollment, course });
+    res.status(201).json({ message: 'Course enrollment successful!', enrollment: enrollmentResult.enrollment, course: enrollmentResult.course });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: 'Failed to enroll in course' });
+    res.status(500).json({ error: error.message || 'Failed to enroll in course' });
   }
 });
+
 
 // GET LOGGED IN USER'S ENROLLMENTS
 app.get('/api/coaching/my-enrollments', authenticateToken, async (req, res) => {
@@ -2346,231 +2392,236 @@ app.post('/api/admin/wallet/charge', authenticateToken, isReceptionOrAdmin, asyn
       return res.status(400).json({ error: 'Valid payment method (wallet, cash, card, tab) is required' });
     }
 
-    let user;
-    if (userId === 'guest') {
-      if (['wallet', 'tab'].includes(paymentMethod)) {
-        return res.status(400).json({ error: 'Unregistered guest players can only pay via Cash or Card POS.' });
-      }
-      
-      const guestEmail = req.body.guestEmail;
-      if (!guestEmail || !guestEmail.trim()) {
-        return res.status(400).json({ error: 'Guest contact email is required' });
-      }
-      
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(guestEmail.trim())) {
-        return res.status(400).json({ error: 'Valid guest contact email is required' });
-      }
+    const totalCalculated = items.reduce((sum, item) => sum + (Number(item.price) * Number(item.qty)), 0);
 
-      const guestName = req.body.guestName || 'Guest Player';
-      
-      // Attempt to find existing user by email (could be a registered user or a placeholder)
-      user = await User.findOne({ email: guestEmail.toLowerCase().trim() });
-      if (!user) {
-        // Create a new placeholder user profile
-        user = new User({
-          name: guestName,
-          email: guestEmail.toLowerCase().trim(),
-          password: 'guest-dummy-password-123',
-          role: 'user',
-          membership: 'None',
-          isVerified: false, // Unverified until they sign up
-          isGoogleUser: false,
-          hasCreatedPassword: false
-        });
-        await user.save();
-      }
-    } else {
-      user = await User.findById(userId);
-      if (!user) return res.status(404).json({ error: 'User not found' });
-    }
-
-    // Validate any court bookings and check stock for inventory items
-    for (const item of items) {
-      if (item.isCourtBooking) {
-        if (!item.courtId || !item.date || !item.slots || !item.slots.length) {
-          return res.status(400).json({ error: 'Court ID, Date, and Time slots are required for spot booking' });
-        }
-
-        const { dateStr: todayStr, hour: currentHour } = getISTTime();
-        if (item.date < todayStr) {
-          return res.status(400).json({ error: `Cannot book courts for past dates: ${item.date}` });
-        }
-        if (item.date === todayStr && item.slots.some(slot => slot <= currentHour)) {
-          return res.status(400).json({ error: `Cannot book past or in-progress slots for today: ${item.slots.filter(s => s <= currentHour).map(s => `${s}:00`).join(', ')}` });
+    const chargeResult = await executeTransaction(async (session) => {
+      let user;
+      if (userId === 'guest') {
+        if (['wallet', 'tab'].includes(paymentMethod)) {
+          throw new Error('Unregistered guest players can only pay via Cash or Card POS.');
         }
         
-        const court = await Court.findById(item.courtId);
-        if (!court || !court.isActive) {
-          return res.status(404).json({ error: `Selected court is not active or not found` });
+        const guestEmail = req.body.guestEmail;
+        if (!guestEmail || !guestEmail.trim()) {
+          throw new Error('Guest contact email is required');
         }
         
-        // Overlap occupancy check
-        const existingBookings = await Booking.find({ court: item.courtId, date: item.date, status: 'confirmed' });
-        let alreadyBooked = [];
-        existingBookings.forEach(eb => {
-          alreadyBooked = alreadyBooked.concat(eb.slots);
-        });
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(guestEmail.trim())) {
+          throw new Error('Valid guest contact email is required');
+        }
+
+        const guestName = req.body.guestName || 'Guest Player';
         
-        const isOverlap = item.slots.some(slot => alreadyBooked.includes(slot));
-        if (isOverlap) {
-          return res.status(400).json({ error: `One or more selected slots for court "${court.name}" on ${item.date} are already booked.` });
+        user = await User.findOne({ email: guestEmail.toLowerCase().trim() }).session(session);
+        if (!user) {
+          user = new User({
+            name: guestName,
+            email: guestEmail.toLowerCase().trim(),
+            password: 'guest-dummy-password-123',
+            role: 'user',
+            membership: 'None',
+            isVerified: false,
+            isGoogleUser: false,
+            hasCreatedPassword: false
+          });
+          await user.save({ session });
         }
       } else {
-        // This is an amenity/catalog item. Check stock if it is a tracked inventory item.
-        if (item.id && !item.id.startsWith('custom_') && !item.id.startsWith('item_custom')) {
-          try {
-            const invItem = await InventoryItem.findById(item.id);
-            if (invItem) {
-              if (invItem.stock < item.qty) {
-                return res.status(400).json({ error: `Insufficient stock for "${invItem.name}". Available: ${invItem.stock}, Requested: ${item.qty}` });
+        user = await User.findById(userId).session(session);
+        if (!user) throw new Error('User not found');
+      }
+
+      // Validate any court bookings and check stock for inventory items
+      for (const item of items) {
+        if (item.isCourtBooking) {
+          if (!item.courtId || !item.date || !item.slots || !item.slots.length) {
+            throw new Error('Court ID, Date, and Time slots are required for spot booking');
+          }
+
+          const { dateStr: todayStr, hour: currentHour } = getISTTime();
+          if (item.date < todayStr) {
+            throw new Error(`Cannot book courts for past dates: ${item.date}`);
+          }
+          if (item.date === todayStr && item.slots.some(slot => slot <= currentHour)) {
+            throw new Error(`Cannot book past or in-progress slots for today: ${item.slots.filter(s => s <= currentHour).map(s => `${s}:00`).join(', ')}`);
+          }
+          
+          const court = await Court.findById(item.courtId).session(session);
+          if (!court || !court.isActive) {
+            throw new Error(`Selected court is not active or not found`);
+          }
+          
+          // Overlap occupancy check
+          const existingBookings = await Booking.find({ court: item.courtId, date: item.date, status: 'confirmed' }).session(session);
+          let alreadyBooked = [];
+          existingBookings.forEach(eb => {
+            alreadyBooked = alreadyBooked.concat(eb.slots);
+          });
+          
+          const isOverlap = item.slots.some(slot => alreadyBooked.includes(slot));
+          if (isOverlap) {
+            throw new Error(`One or more selected slots for court "${court.name}" on ${item.date} are already booked.`);
+          }
+        } else {
+          // This is an amenity/catalog item. Check stock if it is a tracked inventory item.
+          if (item.id && !item.id.startsWith('custom_') && !item.id.startsWith('item_custom')) {
+            try {
+              const invItem = await InventoryItem.findById(item.id).session(session);
+              if (invItem) {
+                if (invItem.stock < item.qty) {
+                  throw new Error(`Insufficient stock for "${invItem.name}". Available: ${invItem.stock}, Requested: ${item.qty}`);
+                }
               }
+            } catch (e) {
+              // Treat as custom if ID doesn't parse as ObjectId
+            }
+          }
+        }
+      }
+
+      let total = 0;
+      const itemsDescription = items.map(item => {
+        total += Number(item.price) * Number(item.qty);
+        return `${item.name} x${item.qty}`;
+      }).join(', ');
+
+      let walletDeduction = 0;
+      if (req.body.useWallet && userId !== 'guest') {
+        walletDeduction = Math.min(user.walletBalance || 0, total);
+        user.walletBalance = (user.walletBalance || 0) - walletDeduction;
+        
+        if (walletDeduction > 0) {
+          const walletTx = new WalletTransaction({
+            user: user._id,
+            amount: -walletDeduction,
+            type: 'spot_billing',
+            description: `Split Wallet portion: ${itemsDescription}`,
+            paymentMethod: 'wallet',
+            processedBy: req.user.id
+          });
+          await walletTx.save({ session });
+        }
+      }
+
+      const netCharge = total - walletDeduction;
+      if (netCharge > 0) {
+        if (paymentMethod === 'wallet') {
+          if ((user.walletBalance || 0) < netCharge) {
+            throw new Error(`Insufficient wallet balance. Total is ₹${netCharge}, but wallet has ₹${user.walletBalance || 0}.`);
+          }
+          user.walletBalance = (user.walletBalance || 0) - netCharge;
+        } else if (paymentMethod === 'tab') {
+          user.tabBalance = (user.tabBalance || 0) + netCharge;
+        }
+      }
+
+      await user.save({ session });
+
+      // Decrement stock for inventory items
+      for (const item of items) {
+        if (!item.isCourtBooking && item.id && !item.id.startsWith('custom_') && !item.id.startsWith('item_custom')) {
+          try {
+            const invItem = await InventoryItem.findById(item.id).session(session);
+            if (invItem) {
+              invItem.stock = Math.max(0, invItem.stock - item.qty);
+              await invItem.save({ session });
             }
           } catch (e) {
-            // Treat as custom if ID doesn't parse as ObjectId
+            // Ignore stock decrements for custom item formats
           }
         }
       }
-    }
 
-    let total = 0;
-    const itemsDescription = items.map(item => {
-      total += Number(item.price) * Number(item.qty);
-      return `${item.name} x${item.qty}`;
-    }).join(', ');
+      const transaction = new WalletTransaction({
+        user: user._id,
+        amount: -(netCharge > 0 ? netCharge : total),
+        type: 'spot_billing',
+        description: walletDeduction > 0 ? `POS (Split) - ${itemsDescription}` : `POS (${paymentMethod.toUpperCase()}) - ${itemsDescription}`,
+        paymentMethod: walletDeduction > 0 && netCharge === 0 ? 'wallet' : paymentMethod,
+        processedBy: req.user.id
+      });
+      await transaction.save({ session });
 
-    let walletDeduction = 0;
-    if (req.body.useWallet && userId !== 'guest') {
-      walletDeduction = Math.min(user.walletBalance || 0, total);
-      user.walletBalance = (user.walletBalance || 0) - walletDeduction;
-      
-      if (walletDeduction > 0) {
-        const walletTx = new WalletTransaction({
+      // Determine stored payment method for Payment record
+      let storedPaymentMethod = paymentMethod;
+      if (walletDeduction > 0 && netCharge === 0) storedPaymentMethod = 'wallet';
+      else if (walletDeduction > 0 && netCharge > 0) storedPaymentMethod = 'split';
+
+      // Split checkout Payment records into 'Court Booking' and 'Club Amenities'
+      const courtItems = items.filter(item => item.isCourtBooking);
+      const amenityItems = items.filter(item => !item.isCourtBooking);
+
+      if (courtItems.length > 0) {
+        const courtTotal = courtItems.reduce((sum, item) => sum + (Number(item.price) * Number(item.qty)), 0);
+        const courtPayment = new Payment({
           user: user._id,
-          amount: -walletDeduction,
-          type: 'spot_billing',
-          description: `Split Wallet portion: ${itemsDescription}`,
-          paymentMethod: 'wallet',
-          processedBy: req.user.id
+          amount: courtTotal,
+          type: 'Court Booking',
+          referenceId: transaction._id,
+          status: 'success',
+          paymentMethod: storedPaymentMethod,
+          razorpayPaymentId: walletDeduction > 0 ? `mock-split-pos-${Date.now()}` : `mock-${paymentMethod}-pos-${Date.now()}`
         });
-        await walletTx.save();
+        await courtPayment.save({ session });
       }
-    }
 
-    const netCharge = total - walletDeduction;
-    if (netCharge > 0) {
-      if (paymentMethod === 'wallet') {
-        if ((user.walletBalance || 0) < netCharge) {
-          return res.status(400).json({ error: `Insufficient wallet balance. Total is ₹${netCharge}, but wallet has ₹${user.walletBalance || 0}.` });
+      if (amenityItems.length > 0) {
+        const amenityTotal = amenityItems.reduce((sum, item) => sum + (Number(item.price) * Number(item.qty)), 0);
+        const amenityPayment = new Payment({
+          user: user._id,
+          amount: amenityTotal,
+          type: 'Club Amenities',
+          referenceId: transaction._id,
+          status: 'success',
+          paymentMethod: storedPaymentMethod,
+          razorpayPaymentId: walletDeduction > 0 ? `mock-split-pos-${Date.now()}` : `mock-${paymentMethod}-pos-${Date.now()}`
+        });
+        await amenityPayment.save({ session });
+      }
+
+      // Now instantiate all validated court bookings
+      for (const item of items) {
+        if (item.isCourtBooking) {
+          const court = await Court.findById(item.courtId).session(session);
+          const booking = new Booking({
+            user: user._id,
+            court: item.courtId,
+            date: item.date,
+            slots: item.slots,
+            totalAmount: Number(item.price) * Number(item.qty),
+            status: 'confirmed',
+            paymentId: `POS-SPOT-${Date.now()}`
+          });
+          booking.qrCodeData = booking._id.toString();
+          await booking.save({ session });
+
+          // Create player notification
+          const bookingNotif = new Notification({
+            title: 'Court Booking Confirmed (Spot Booking)',
+            message: `Your spot booking for ${court.name} on ${item.date} at ${item.slots.map(s => `${s}:00`).join(', ')} is confirmed. QR check-in ready!`,
+            type: 'booking',
+            user: user._id
+          });
+          await bookingNotif.save({ session });
         }
-        user.walletBalance = (user.walletBalance || 0) - netCharge;
-      } else if (paymentMethod === 'tab') {
-        user.tabBalance = (user.tabBalance || 0) + netCharge;
       }
-    }
 
-    await user.save();
-
-    // Decrement stock for inventory items
-    for (const item of items) {
-      if (!item.isCourtBooking && item.id && !item.id.startsWith('custom_') && !item.id.startsWith('item_custom')) {
-        try {
-          const invItem = await InventoryItem.findById(item.id);
-          if (invItem) {
-            invItem.stock = Math.max(0, invItem.stock - item.qty);
-            await invItem.save();
-          }
-        } catch (e) {
-          // Ignore stock decrements for custom item formats
-        }
-      }
-    }
-
-    const transaction = new WalletTransaction({
-      user: user._id,
-      amount: -(netCharge > 0 ? netCharge : total),
-      type: 'spot_billing',
-      description: walletDeduction > 0 ? `POS (Split) - ${itemsDescription}` : `POS (${paymentMethod.toUpperCase()}) - ${itemsDescription}`,
-      paymentMethod: walletDeduction > 0 && netCharge === 0 ? 'wallet' : paymentMethod,
-      processedBy: req.user.id
+      return { user, transaction };
     });
-    await transaction.save();
-
-    // Determine stored payment method for Payment record
-    let storedPaymentMethod = paymentMethod;
-    if (walletDeduction > 0 && netCharge === 0) storedPaymentMethod = 'wallet';
-    else if (walletDeduction > 0 && netCharge > 0) storedPaymentMethod = 'split';
-
-    // Split checkout Payment records into 'Court Booking' and 'Club Amenities'
-    const courtItems = items.filter(item => item.isCourtBooking);
-    const amenityItems = items.filter(item => !item.isCourtBooking);
-
-    if (courtItems.length > 0) {
-      const courtTotal = courtItems.reduce((sum, item) => sum + (Number(item.price) * Number(item.qty)), 0);
-      const courtPayment = new Payment({
-        user: user._id,
-        amount: courtTotal,
-        type: 'Court Booking',
-        referenceId: transaction._id,
-        status: 'success',
-        paymentMethod: storedPaymentMethod,
-        razorpayPaymentId: walletDeduction > 0 ? `mock-split-pos-${Date.now()}` : `mock-${paymentMethod}-pos-${Date.now()}`
-      });
-      await courtPayment.save();
-    }
-
-    if (amenityItems.length > 0) {
-      const amenityTotal = amenityItems.reduce((sum, item) => sum + (Number(item.price) * Number(item.qty)), 0);
-      const amenityPayment = new Payment({
-        user: user._id,
-        amount: amenityTotal,
-        type: 'Club Amenities',
-        referenceId: transaction._id,
-        status: 'success',
-        paymentMethod: storedPaymentMethod,
-        razorpayPaymentId: walletDeduction > 0 ? `mock-split-pos-${Date.now()}` : `mock-${paymentMethod}-pos-${Date.now()}`
-      });
-      await amenityPayment.save();
-    }
-
-    // Now instantiate all validated court bookings
-    for (const item of items) {
-      if (item.isCourtBooking) {
-        const court = await Court.findById(item.courtId);
-        const booking = new Booking({
-          user: user._id,
-          court: item.courtId,
-          date: item.date,
-          slots: item.slots,
-          totalAmount: Number(item.price) * Number(item.qty),
-          status: 'confirmed',
-          paymentId: `POS-SPOT-${Date.now()}`
-        });
-        booking.qrCodeData = booking._id.toString();
-        await booking.save();
-
-        // Create player notification
-        const bookingNotif = new Notification({
-          title: 'Court Booking Confirmed (Spot Booking)',
-          message: `Your spot booking for ${court.name} on ${item.date} at ${item.slots.map(s => `${s}:00`).join(', ')} is confirmed. QR check-in ready!`,
-          type: 'booking',
-          user: user._id
-        });
-        await bookingNotif.save();
-      }
-    }
 
     res.json({
-      message: `Successfully charged ₹${total} via ${paymentMethod}`,
-      walletBalance: user.walletBalance,
-      tabBalance: user.tabBalance,
-      transaction
+      message: `Successfully charged ₹${totalCalculated} via ${paymentMethod}`,
+      walletBalance: chargeResult.user.walletBalance,
+      tabBalance: chargeResult.user.tabBalance,
+      transaction: chargeResult.transaction
     });
   } catch (error) {
     console.error('Wallet Charge Error:', error);
-    res.status(500).json({ error: 'Spot charging failed' });
+    res.status(500).json({ error: error.message || 'Spot charging failed' });
   }
 });
+
 
 app.get('/api/admin/wallet/transactions/:userId', authenticateToken, async (req, res) => {
   try {
@@ -3330,6 +3381,12 @@ mongoose.connect(MONGO_URI)
     });
   })
   .catch(err => {
-    console.error('❌ MongoDB Atlas connection crash: ', err.message);
+    console.error('\n❌ MongoDB Atlas connection crash: ', err.message);
+    console.error('==================================================');
+    console.error('Troubleshooting Guide:');
+    console.error('1. Check if MongoDB is running locally (e.g. net start MongoDB).');
+    console.error('2. Verify MONGODB_URI/MONGO_URI in your .env file is correct.');
+    console.error('3. If using MongoDB Atlas, check your internet connection and IP Whitelist settings.');
+    console.error('==================================================\n');
     process.exit(1);
   });

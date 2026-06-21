@@ -18,7 +18,18 @@ const seedDefaultAdmin = async () => {
     throw new Error('DEFAULT_ADMIN_EMAIL and DEFAULT_ADMIN_PASSWORD are required');
   }
 
-  await mongoose.connect(MONGO_URI);
+  try {
+    await mongoose.connect(MONGO_URI);
+  } catch (err) {
+    console.error('\n❌ MongoDB Connection Failed:', err.message);
+    console.error('==================================================');
+    console.error('Troubleshooting Guide:');
+    console.error('1. Check if MongoDB is running locally (e.g. net start MongoDB).');
+    console.error('2. Verify MONGODB_URI in your .env file is correct.');
+    console.error('3. If using MongoDB Atlas, check your internet connection and IP Whitelist settings.');
+    console.error('==================================================\n');
+    throw err;
+  }
 
   const existingAdmin = await User.findOne({ email: DEFAULT_ADMIN_EMAIL });
   if (existingAdmin) {

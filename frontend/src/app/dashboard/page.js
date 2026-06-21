@@ -38,6 +38,17 @@ const formatDateDMY = (dateInput) => {
   return dateStr;
 };
 
+const generateInvoiceNo = (id) => {
+  const suffix = id ? id.slice(-6).toUpperCase() : Math.floor(1000 + Math.random() * 9000).toString();
+  return `INV-${suffix}`;
+};
+
+const getFallbackDate = (createdAt, enrolledAt) => {
+  if (enrolledAt) return enrolledAt;
+  if (createdAt) return createdAt;
+  return new Date();
+};
+
 export default function Dashboard() {
   const router = useRouter();
   const { user, setUser, token, loading: appLoading, API_BASE_URL, buyMembership, logout, showToast, createPassword } = useApp();
@@ -67,16 +78,9 @@ export default function Dashboard() {
   };
 
   // Profile balances and settlements state
-  const [profileUser, setProfileUser] = useState(null);
   const [topupAmount, setTopupAmount] = useState('');
   const [topupLoading, setTopupLoading] = useState(false);
   const [settleLoading, setSettleLoading] = useState(false);
-
-  useEffect(() => {
-    if (user) {
-      setProfileUser(user);
-    }
-  }, [user]);
 
   const handleTopUpWallet = async (e) => {
     e.preventDefault();
@@ -108,23 +112,23 @@ export default function Dashboard() {
   };
 
   const handleSettleTab = async (method) => {
-    if (!profileUser || profileUser.tabBalance <= 0) return;
+    if (!user || user.tabBalance <= 0) return;
     
     if (method === 'wallet') {
-      if ((profileUser.walletBalance || 0) < profileUser.tabBalance) {
+      if ((user.walletBalance || 0) < user.tabBalance) {
         showToast('Insufficient wallet balance to pay tab! Please top up your wallet first.', 'error');
         return;
       }
-      if (!window.confirm(`Confirm settling your tab balance of ₹${profileUser.tabBalance} using your club wallet funds?`)) return;
+      if (!window.confirm(`Confirm settling your tab balance of ₹${user.tabBalance} using your club wallet funds?`)) return;
     } else {
-      if (!window.confirm(`Initiate mock Razorpay payment of ₹${profileUser.tabBalance} to settle your outstanding tab?`)) return;
+      if (!window.confirm(`Initiate mock Razorpay payment of ₹${user.tabBalance} to settle your outstanding tab?`)) return;
     }
     
     setSettleLoading(true);
     try {
       const payload = method === 'wallet' 
-        ? { amount: profileUser.tabBalance, useWallet: true }
-        : { amount: profileUser.tabBalance, paymentMethod: 'card' };
+        ? { amount: user.tabBalance, useWallet: true }
+        : { amount: user.tabBalance, paymentMethod: 'card' };
         
       const res = await fetch(`${API_BASE_URL}/users/settle-tab`, {
         method: 'POST',
@@ -146,6 +150,7 @@ export default function Dashboard() {
       setSettleLoading(false);
     }
   };
+
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedTicket, setSelectedTicket] = useState(null); // dynamic pass print modal
@@ -164,7 +169,6 @@ export default function Dashboard() {
         });
         if (meRes.ok) {
           const meData = await meRes.json();
-          setProfileUser(meData);
           setUser(meData);
           localStorage.setItem('cy_user', JSON.stringify(meData));
         }
@@ -280,7 +284,7 @@ export default function Dashboard() {
     if (invoiceType === 'Wallet Top-Up') {
       const finalAmount = item.amount;
       setInvoiceModalData({
-        invoiceNo: `INV-${item.id?.slice(-6).toUpperCase() || Math.floor(1000 + Math.random() * 9000)}`,
+        invoiceNo: generateInvoiceNo(item.id),
         date: formatDateDMY(item.date),
         type: 'Wallet Top-Up',
         member: { name: user?.name, email: user?.email, membership: user?.membership || 'None' },
@@ -304,8 +308,8 @@ export default function Dashboard() {
       : [{ description: `Court Reservation: ${item.court?.name || 'Badminton Arena'} (${formatDateDMY(item.date)})`, qty: item.slots?.length || 1, rate: computedSubtotal / (item.slots?.length || 1) }];
     
     setInvoiceModalData({
-      invoiceNo: `INV-${item._id?.slice(-6).toUpperCase() || Math.floor(1000 + Math.random() * 9000)}`,
-      date: formatDateDMY(isCoaching ? item.enrolledAt : item.createdAt || Date.now()),
+      invoiceNo: generateInvoiceNo(item._id),
+      date: formatDateDMY(isCoaching ? item.enrolledAt : item.createdAt || getFallbackDate(item.createdAt, item.enrolledAt)),
       type: invoiceType,
       member: { name: user?.name, email: user?.email, membership: user?.membership || 'None' },
       items: lineItems,
@@ -521,20 +525,20 @@ export default function Dashboard() {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="bg-white/[0.02] border border-white/5 p-4 rounded-xl">
                       <span className="text-[9px] text-gray-500 uppercase tracking-wider font-bold block">Prepaid Wallet</span>
-                      <span className="text-xl font-mono font-black text-neon-green mt-1 block">₹{profileUser?.walletBalance || 0}</span>
+                      <span className="text-xl font-mono font-black text-neon-green mt-1 block">₹{user?.walletBalance || 0}</span>
                     </div>
 
                     <div className="bg-white/[0.02] border border-white/5 p-4 rounded-xl">
                       <span className="text-[9px] text-gray-500 uppercase tracking-wider font-bold block">Active Postpaid Tab</span>
-                      <span className="text-xl font-mono font-black text-yellow-400 mt-1 block">₹{profileUser?.tabBalance || 0}</span>
+                      <span className="text-xl font-mono font-black text-yellow-400 mt-1 block">₹{user?.tabBalance || 0}</span>
                     </div>
                   </div>
 
                   {/* ACTIVE TAB SETTLEMENT SECTION */}
-                  {profileUser?.tabBalance > 0 && (
+                  {user?.tabBalance > 0 && (
                     <div className="border-t border-white/5 pt-4 space-y-3">
                       <div>
-                        <span className="text-[10px] text-yellow-400 font-extrabold uppercase tracking-wide block">Outstanding Tab Balance: ₹{profileUser.tabBalance}</span>
+                        <span className="text-[10px] text-yellow-400 font-extrabold uppercase tracking-wide block">Outstanding Tab Balance: ₹{user.tabBalance}</span>
                         <p className="text-[9px] text-gray-500 mt-0.5">Pay off your postpaid tab online using your wallet or mock Razorpay payment.</p>
                       </div>
 
@@ -790,7 +794,7 @@ export default function Dashboard() {
                       ))
                     ) : (
                       <div className="glass-panel p-12 rounded-2xl border-white/5 text-center text-xs text-gray-500 uppercase tracking-widest font-bold">
-                        No active court reservations. Select "Book Courts" to lock a slot.
+                        No active court reservations. Select &quot;Book Courts&quot; to lock a slot.
                       </div>
                     )
                   ) : activeTab === 'coaching' ? (
@@ -876,7 +880,7 @@ export default function Dashboard() {
                       })
                     ) : (
                       <div className="glass-panel p-12 rounded-2xl border-white/5 text-center text-xs text-gray-500 uppercase tracking-widest font-bold">
-                        No active coaching enrollments. Join Academy courses under "Coaching"!
+                        No active coaching enrollments. Join Academy courses under &quot;Coaching&quot;!
                       </div>
                     )
                   ) : activeTab === 'past' ? (

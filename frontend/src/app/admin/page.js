@@ -1,6 +1,6 @@
 // C:\Users\raipr\.gemini\antigravity\scratch\the-courtyard\frontend\src\app\admin/page.js
 'use client';
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/context/AppContext';
 import { Navbar, BottomNav, Footer } from '@/components/Navigation';
@@ -86,6 +86,28 @@ const resolveAssetUrl = (url, API_BASE_URL) => {
   return `${apiRoot}${url.startsWith('/') ? '' : '/'}${url}`;
 };
 
+const fallbackStats = {
+  summary: {
+    totalBookings: 12,
+    totalCoaching: 8,
+    totalMembers: 4,
+    totalRevenue: 34850,
+    courtRevenue: 15400,
+    coachingRevenue: 10250,
+    membershipRevenue: 9200
+  },
+  courtUtilization: 48,
+  peakBookingHours: [
+    { hour: '17:00', bookings: 12 },
+    { hour: '18:00', bookings: 10 },
+    { hour: '19:00', bookings: 9 },
+    { hour: '07:00', bookings: 7 },
+    { hour: '08:00', bookings: 5 }
+  ],
+  membershipGrowth: { Basic: 2, Pro: 1, Elite: 1 },
+  mostBookedCoach: 'Coach David Miller'
+};
+
 export default function Admin() {
   const router = useRouter();
   const { user, token, loading: appLoading, API_BASE_URL, showToast } = useApp();
@@ -118,7 +140,7 @@ export default function Admin() {
   const [bookingSubTab, setBookingSubTab] = useState('active'); // active, past
   const [selectedEnrollmentForAttendance, setSelectedEnrollmentForAttendance] = useState(null);
   const [isAttendanceModalOpen, setIsAttendanceModalOpen] = useState(false);
-  const [attendanceDatePicker, setAttendanceDatePicker] = useState(new Date().toISOString().split('T')[0]);
+  const [attendanceDatePicker, setAttendanceDatePicker] = useState('2026-06-21');
   const [posUseWallet, setPosUseWallet] = useState(false);
   const [spotGuestEmail, setSpotGuestEmail] = useState('');
 
@@ -167,7 +189,11 @@ export default function Admin() {
   
   // Slot Blocking form state
   const [blockCourt, setBlockCourt] = useState('');
-  const [blockDate, setBlockDate] = useState('');
+  const [blockDate, setBlockDate] = useState(() => {
+    const t = new Date();
+    t.setDate(t.getDate() + 1);
+    return t.toISOString().split('T')[0];
+  });
   const [blockSlots, setBlockSlots] = useState([]);
 
   // Promo Broadcast form state
@@ -182,8 +208,8 @@ export default function Admin() {
   const [payoutsList, setPayoutsList] = useState([]);
   const [ledgerCategoryFilter, setLedgerCategoryFilter] = useState('all');
   const [ledgerTimeFilter, setLedgerTimeFilter] = useState('all');
-  const [ledgerSelectedMonth, setLedgerSelectedMonth] = useState((new Date().getMonth() + 1).toString().padStart(2, '0'));
-  const [ledgerSelectedYear, setLedgerSelectedYear] = useState(new Date().getFullYear().toString());
+  const [ledgerSelectedMonth, setLedgerSelectedMonth] = useState('06');
+  const [ledgerSelectedYear, setLedgerSelectedYear] = useState('2026');
   const [spotSearchQuery, setSpotSearchQuery] = useState('');
   const [spotSelectedUser, setSpotSelectedUser] = useState(null);
   const [spotCart, setSpotCart] = useState([]);
@@ -212,10 +238,17 @@ export default function Admin() {
   const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
   const [invoiceModalData, setInvoiceModalData] = useState(null);
   const [systemSettingsSubTab, setSystemSettingsSubTab] = useState('pricing'); // pricing, manage, tax_comm
-  const [currentTime, setCurrentTime] = useState(new Date());
+  const [currentTime, setCurrentTime] = useState(() => new Date('2026-06-21T12:00:00'));
   useEffect(() => {
+    setCurrentTime(new Date());
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    setAttendanceDatePicker(new Date().toISOString().split('T')[0]);
+    setLedgerSelectedMonth((new Date().getMonth() + 1).toString().padStart(2, '0'));
+    setLedgerSelectedYear(new Date().getFullYear().toString());
   }, []);
 
   // QR Scanner state
@@ -228,30 +261,7 @@ export default function Admin() {
 
   const [loading, setLoading] = useState(true);
 
-  // Fallback dummy analytics if server connections pending
-  const fallbackStats = {
-    summary: {
-      totalBookings: 12,
-      totalCoaching: 8,
-      totalMembers: 4,
-      totalRevenue: 34850,
-      courtRevenue: 15400,
-      coachingRevenue: 10250,
-      membershipRevenue: 9200
-    },
-    courtUtilization: 48,
-    peakBookingHours: [
-      { hour: '17:00', bookings: 12 },
-      { hour: '18:00', bookings: 10 },
-      { hour: '19:00', bookings: 9 },
-      { hour: '07:00', bookings: 7 },
-      { hour: '08:00', bookings: 5 }
-    ],
-    membershipGrowth: { Basic: 2, Pro: 1, Elite: 1 },
-    mostBookedCoach: 'Coach David Miller'
-  };
-
-  async function fetchAdminData() {
+  const fetchAdminData = useCallback(async () => {
     if (!token) return;
     setLoading(true);
     try {
@@ -293,9 +303,7 @@ export default function Admin() {
         }
       }
       setCourtsList(courtsData);
-      if (courtsData.length && !blockCourt) {
-        setBlockCourt(courtsData[0]._id);
-      }
+      setBlockCourt(prev => prev || (courtsData.length ? courtsData[0]._id : ''));
 
       // 4. Fetch all bookings for admin management
       const bookingsRes = await fetch(`${API_BASE_URL}/admin/bookings`, {
@@ -362,25 +370,9 @@ export default function Admin() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [token, user, API_BASE_URL, showToast]);
 
-  // Load additional premium tools when active tab changes
-  useEffect(() => {
-    if (!token) return;
-    if (activeTab === 'ledger') {
-      fetchLedgerData();
-    } else if (activeTab === 'settings') {
-      fetchGSTSettings();
-    } else if (activeTab === 'analytics') {
-      fetchQCData();
-    } else if (activeTab === 'grid') {
-      fetchCourtGridData();
-      const interval = setInterval(fetchCourtGridData, 15000); // 15 seconds refresh
-      return () => clearInterval(interval);
-    }
-  }, [activeTab, token]);
-
-  const fetchGSTSettings = async () => {
+  const fetchGSTSettings = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE_URL}/admin/settings`, {
         headers: { 'Authorization': `Bearer ${token}` }
@@ -392,9 +384,9 @@ export default function Admin() {
     } catch (err) {
       console.error(err);
     }
-  };
+  }, [API_BASE_URL, token]);
 
-  const fetchLedgerData = async () => {
+  const fetchLedgerData = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE_URL}/admin/ledger`, {
         headers: { 'Authorization': `Bearer ${token}` }
@@ -407,9 +399,9 @@ export default function Admin() {
     } catch (err) {
       console.error(err);
     }
-  };
+  }, [API_BASE_URL, token]);
 
-  const fetchQCData = async () => {
+  const fetchQCData = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE_URL}/admin/coaching/quality-control`, {
         headers: { 'Authorization': `Bearer ${token}` }
@@ -421,9 +413,9 @@ export default function Admin() {
     } catch (err) {
       console.error(err);
     }
-  };
+  }, [API_BASE_URL, token]);
 
-  const fetchCourtGridData = async () => {
+  const fetchCourtGridData = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE_URL}/admin/bookings`, {
         headers: { 'Authorization': `Bearer ${token}` }
@@ -435,7 +427,23 @@ export default function Admin() {
     } catch (err) {
       console.error(err);
     }
-  };
+  }, [API_BASE_URL, token]);
+
+  // Load additional premium tools when active tab changes
+  useEffect(() => {
+    if (!token) return;
+    if (activeTab === 'ledger') {
+      setTimeout(() => { fetchLedgerData(); }, 0);
+    } else if (activeTab === 'settings') {
+      setTimeout(() => { fetchGSTSettings(); }, 0);
+    } else if (activeTab === 'analytics') {
+      setTimeout(() => { fetchQCData(); }, 0);
+    } else if (activeTab === 'grid') {
+      setTimeout(() => { fetchCourtGridData(); }, 0);
+      const interval = setInterval(() => { fetchCourtGridData(); }, 15000); // 15 seconds refresh
+      return () => clearInterval(interval);
+    }
+  }, [activeTab, token, fetchLedgerData, fetchGSTSettings, fetchQCData, fetchCourtGridData]);
 
   // Spot Court Booking Scheduler Logic
   const calculateDynamicPrice = () => {
@@ -752,6 +760,12 @@ export default function Admin() {
 
 
   useEffect(() => {
+    if (user?.role === 'reception' && activeTab === 'analytics') {
+      setTimeout(() => { setActiveTab('scanner'); }, 0);
+    }
+  }, [user, activeTab]);
+
+  useEffect(() => {
     if (appLoading) return;
 
     if (!token) {
@@ -765,22 +779,13 @@ export default function Admin() {
       return;
     }
 
-    if (user && user.role === 'reception' && activeTab === 'analytics') {
-      setActiveTab('scanner');
-    }
-
-    fetchAdminData();
-    
-    // Default block date to tomorrow
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    setBlockDate(tomorrow.toISOString().split('T')[0]);
-  }, [token, appLoading, user, router]);
+    setTimeout(() => { fetchAdminData(); }, 0);
+  }, [token, appLoading, user, router, fetchAdminData, showToast]);
 
   // Fetch availability for the admin lock slots tab
   const [bookedSlotsAdmin, setBookedSlotsAdmin] = useState([]);
   
-  const fetchAvailability = async () => {
+  const fetchAvailability = useCallback(async () => {
     if (!blockCourt || !blockDate) return;
     try {
       const res = await fetch(`${API_BASE_URL}/courts/availability?courtId=${blockCourt}&date=${blockDate}`);
@@ -791,12 +796,14 @@ export default function Admin() {
     } catch (err) {
       setBookedSlotsAdmin([]);
     }
-  };
+  }, [blockCourt, blockDate, API_BASE_URL]);
 
   useEffect(() => {
-    fetchAvailability();
-    setBlockSlots([]); // Reset admin block selection when date/court changes
-  }, [blockCourt, blockDate, API_BASE_URL]);
+    setTimeout(() => { fetchAvailability(); }, 0);
+    setTimeout(() => {
+      setBlockSlots([]); // Reset admin block selection when date/court changes
+    }, 0);
+  }, [blockCourt, blockDate, API_BASE_URL, fetchAvailability]);
 
   const handleBlockSlotsSubmit = async (e) => {
     e.preventDefault();
@@ -2388,7 +2395,7 @@ export default function Admin() {
                           <div>
                             <span className="text-[10px] text-yellow-500 uppercase tracking-widest font-black block">Active Outstanding Tab Balance</span>
                             <span className="text-xl font-black text-white mt-1 block">₹{spotSelectedUser.tabBalance}</span>
-                            <p className="text-[9px] text-gray-500 mt-1">Clear this member's accumulated post-paid room-tab balances.</p>
+                            <p className="text-[9px] text-gray-500 mt-1">Clear this member&apos;s accumulated post-paid room-tab balances.</p>
                           </div>
                           
                           <div className="grid grid-cols-2 gap-2">
@@ -2828,7 +2835,7 @@ export default function Admin() {
                       <ScanLine className="w-5 h-5 text-neon-green" />
                       QR Code Check-In Scanner
                     </h3>
-                    <p className="text-xs text-gray-500 mb-6">Scan or enter the QR code from a player's booking pass to verify their check-in.</p>
+                    <p className="text-xs text-gray-500 mb-6">Scan or enter the QR code from a player&apos;s booking pass to verify their check-in.</p>
 
                     {/* Manual QR Input */}
                     <div className="flex gap-3 mb-6">

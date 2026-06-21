@@ -30,43 +30,42 @@ const resolveAssetUrl = (url, API_BASE_URL) => {
   return `${apiRoot}${url.startsWith('/') ? '' : '/'}${url}`;
 };
 
+const fallbackTournaments = [
+  { _id: 't1', title: 'The Courtyard Summer Smash 2026', description: 'Our flagship double-elimination battle. Bring your best partner, compete under our high-performance stadium lights, and contest for the prestigious gold cup.', date: '2026-06-15', prizePool: '₹50,000 Cash + Trophy', entryFee: 999, image: 'https://images.unsplash.com/photo-1587280501635-68a0e82cd5ff?q=80&w=600', status: 'upcoming', registrations: [] },
+  { _id: 't2', title: 'Kitchen Finesse & Dink Master Cup', description: 'A specialized championship testing patience, dink angles, and soft drops. Standard doubles format with separate brackets for intermediate and pro level pairings.', date: '2026-07-02', prizePool: '₹25,000 Pickleball Equipment Gear', entryFee: 499, image: 'https://images.unsplash.com/photo-1526676082484-64c99730ee35?q=80&w=600', status: 'upcoming', registrations: [] }
+];
+
 export default function Tournaments() {
   const router = useRouter();
   const { user, API_BASE_URL } = useApp();
 
   const [tournaments, setTournaments] = useState([]);
-  const [currentTime, setCurrentTime] = useState(new Date());
-
-  // Fallbacks if backend server pending
-  const fallbackTournaments = [
-    { _id: 't1', title: 'The Courtyard Summer Smash 2026', description: 'Our flagship double-elimination battle. Bring your best partner, compete under our high-performance stadium lights, and contest for the prestigious gold cup.', date: '2026-06-15', prizePool: '₹50,000 Cash + Trophy', entryFee: 999, image: 'https://images.unsplash.com/photo-1587280501635-68a0e82cd5ff?q=80&w=600', status: 'upcoming', registrations: [] },
-    { _id: 't2', title: 'Kitchen Finesse & Dink Master Cup', description: 'A specialized championship testing patience, dink angles, and soft drops. Standard doubles format with separate brackets for intermediate and pro level pairings.', date: '2026-07-02', prizePool: '₹25,000 Pickleball Equipment Gear', entryFee: 499, image: 'https://images.unsplash.com/photo-1526676082484-64c99730ee35?q=80&w=600', status: 'upcoming', registrations: [] }
-  ];
-
-  async function fetchTournaments() {
-    try {
-      const res = await fetch(`${API_BASE_URL}/tournaments`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.length) setTournaments(data);
-        else setTournaments(fallbackTournaments);
-      } else {
-        setTournaments(fallbackTournaments);
-      }
-    } catch (err) {
-      setTournaments(fallbackTournaments);
-    }
-  }
+  const [currentTime, setCurrentTime] = useState(() => new Date('2026-06-21T12:00:00'));
 
   useEffect(() => {
     if (user?.role === 'admin') {
       router.push('/admin');
       return;
     }
+    async function fetchTournaments() {
+      try {
+        const res = await fetch(`${API_BASE_URL}/tournaments`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.length) setTournaments(data);
+          else setTournaments(fallbackTournaments);
+        } else {
+          setTournaments(fallbackTournaments);
+        }
+      } catch (err) {
+        setTournaments(fallbackTournaments);
+      }
+    }
     fetchTournaments();
-  }, [user, router]);
+  }, [user, router, API_BASE_URL]);
 
   useEffect(() => {
+    setCurrentTime(new Date());
     const timer = setInterval(() => setCurrentTime(new Date()), 30000);
     return () => clearInterval(timer);
   }, []);

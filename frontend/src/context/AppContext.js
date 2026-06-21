@@ -1,30 +1,33 @@
 // C:\Users\raipr\.gemini\antigravity\scratch\the-courtyard\frontend\src\context\AppContext.js
 'use client';
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 
 const AppContext = createContext();
 
-const API_BASE_URL = 'http://localhost:5000/api';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:5000/api';
 
 export function AppProvider({ children }) {
-  const [user, setUser] = useState(null);
   const [token, setToken] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [toasts, setToasts] = useState([]); // Array of { id, message, type }
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    // Restore authentication details from localStorage
-    const savedToken = localStorage.getItem('cy_token');
-    const savedUser = localStorage.getItem('cy_user');
-    
-    if (savedToken && savedUser) {
-      setToken(savedToken);
-      setUser(JSON.parse(savedUser));
+    if (typeof window !== 'undefined') {
+      const savedToken = localStorage.getItem('cy_token');
+      const savedUser = localStorage.getItem('cy_user');
+      if (savedToken) setToken(savedToken);
+      if (savedUser) {
+        try {
+          setUser(JSON.parse(savedUser));
+        } catch (e) {
+          console.error('Failed to parse saved user:', e);
+        }
+      }
     }
-    setLoading(false);
   }, []);
+  const [toasts, setToasts] = useState([]); // Array of { id, message, type }
 
-  const showToast = (message, type = 'success') => {
+  const showToast = useCallback((message, type = 'success') => {
     const id = Date.now();
     setToasts((prev) => [...prev, { id, message, type }]);
     
@@ -32,11 +35,11 @@ export function AppProvider({ children }) {
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 4000);
-  };
+  }, []);
 
-  const removeToast = (id) => {
+  const removeToast = useCallback((id) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
-  };
+  }, []);
 
   const login = async (email, password) => {
     try {

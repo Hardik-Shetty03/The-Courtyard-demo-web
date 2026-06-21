@@ -23,8 +23,8 @@ export default function InvoiceModal({ isOpen, onClose, invoiceData }) {
   if (!isOpen || !invoiceData) return null;
 
   const {
-    invoiceNo = `INV-2026-${Math.floor(1000 + Math.random() * 9000)}`,
-    date = new Date(),
+    invoiceNo = 'INV-2026-0000',
+    date = '',
     type = 'Court Booking',
     member = { name: 'Valued Guest', email: '', membership: 'None' },
     items = [],

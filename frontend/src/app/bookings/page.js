@@ -37,6 +37,15 @@ const formatDateDMY = (dateInput) => {
   return dateStr;
 };
 
+
+
+// Fallback courts if server offline
+const fallbackCourts = [
+  { _id: '1', name: 'Court 1', surface: 'Professional Acrylic Cushion', basePrice: 800, peakPrice: 1200, image: 'https://images.unsplash.com/photo-1626224583764-f87db24ac4ea?q=80&w=400' },
+  { _id: '2', name: 'Court 2', surface: 'Professional Acrylic Cushion', basePrice: 800, peakPrice: 1200, image: 'https://images.unsplash.com/photo-1595435934249-5df7ed86e1c0?q=80&w=400' },
+  { _id: '3', name: 'Court 3', surface: 'Professional Acrylic Cushion', basePrice: 800, peakPrice: 1200, image: 'https://images.unsplash.com/photo-1530541930197-ff16ac917b0e?q=80&w=400' }
+];
+
 export default function Bookings() {
   const router = useRouter();
   const { user, setUser, token, API_BASE_URL, showToast } = useApp();
@@ -47,20 +56,22 @@ export default function Bookings() {
 
   const [courts, setCourts] = useState([]);
   const [selectedCourt, setSelectedCourt] = useState(null);
-  const [selectedDate, setSelectedDate] = useState('');
+  const [selectedDate, setSelectedDate] = useState(() => {
+    const now = new Date();
+    const tomorrow = new Date(now.getTime() + (24 * 60 * 60 * 1000));
+    const tomorrowIST = new Date(tomorrow.getTime() + (5.5 * 60 * 60 * 1000));
+    const year = tomorrowIST.getUTCFullYear();
+    const month = String(tomorrowIST.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(tomorrowIST.getUTCDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  });
   const [bookedSlots, setBookedSlots] = useState([]);
   const [selectedSlots, setSelectedSlots] = useState([]);
   const [loading, setLoading] = useState(false);
   const [bookingConfirmed, setBookingConfirmed] = useState(null); // stores booking ticket details
   const [showRazorpayModal, setShowRazorpayModal] = useState(false);
   const [useWallet, setUseWallet] = useState(false);
-
-  // Fallback courts if server offline
-  const fallbackCourts = [
-    { _id: '1', name: 'Court 1', surface: 'Professional Acrylic Cushion', basePrice: 800, peakPrice: 1200, image: 'https://images.unsplash.com/photo-1626224583764-f87db24ac4ea?q=80&w=400' },
-    { _id: '2', name: 'Court 2', surface: 'Professional Acrylic Cushion', basePrice: 800, peakPrice: 1200, image: 'https://images.unsplash.com/photo-1595435934249-5df7ed86e1c0?q=80&w=400' },
-    { _id: '3', name: 'Court 3', surface: 'Professional Acrylic Cushion', basePrice: 800, peakPrice: 1200, image: 'https://images.unsplash.com/photo-1530541930197-ff16ac917b0e?q=80&w=400' }
-  ];
+  const [simulatedOrderId] = useState(() => Date.now().toString().slice(6));
 
   // Fetch courts on mount
   useEffect(() => {
@@ -119,16 +130,7 @@ export default function Bookings() {
       }
     }
     fetchUserProfile();
-
-    // Default to tomorrow's date
-    const now = new Date();
-    const tomorrow = new Date(now.getTime() + (24 * 60 * 60 * 1000));
-    const tomorrowIST = new Date(tomorrow.getTime() + (5.5 * 60 * 60 * 1000));
-    const year = tomorrowIST.getUTCFullYear();
-    const month = String(tomorrowIST.getUTCMonth() + 1).padStart(2, '0');
-    const day = String(tomorrowIST.getUTCDate()).padStart(2, '0');
-    setSelectedDate(`${year}-${month}-${day}`);
-  }, [token, router]);
+  }, [token, router, API_BASE_URL, setUser, user?.role]);
 
   // Fetch availability when court or date changes
   useEffect(() => {
@@ -705,7 +707,7 @@ export default function Bookings() {
               
               <div className="flex items-center gap-3 p-3 rounded-lg bg-blue-500/5 border border-blue-500/10 text-blue-400 text-xs">
                 <Info className="w-5 h-5 shrink-0" />
-                <span>Simulated Order ID: order_cy_{Date.now().toString().slice(6)}</span>
+                <span>Simulated Order ID: order_cy_{simulatedOrderId}</span>
               </div>
             </div>
 
