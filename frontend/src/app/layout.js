@@ -2,7 +2,6 @@
 import { Outfit } from "next/font/google";
 import "./globals.css";
 import { AppProvider } from "@/context/AppContext";
-import Chatbot from "@/components/Chatbot";
 
 const outfit = Outfit({
   subsets: ["latin"],
@@ -27,7 +26,6 @@ export default function RootLayout({ children }) {
       <body className="bg-sport-dark text-gray-100 min-h-full flex flex-col font-sans">
         <AppProvider>
           {children}
-          <Chatbot />
         </AppProvider>
       </body>
     </html>
