@@ -21,9 +21,14 @@ services:
       - key: JWT_SECRET
         value: the_courtyard_jwt_secret_key_2026_premium
 
-      # Email — Resend (Primary, HTTP API, works on Render)
+      # Email — Resend (Secondary)
       - key: RESEND_API_KEY
         value: re_9N2LhYUe_G1MxkRj54ErY5sjgDNK4cfVr
+
+      # Email — Brevo (Primary, sends to any email, 300/day free)
+      # Set this in Render dashboard manually
+      - key: BREVO_API_KEY
+        sync: false
 
       # Email — SMTP Gmail (Fallback, works locally)
       - key: SMTP_HOST

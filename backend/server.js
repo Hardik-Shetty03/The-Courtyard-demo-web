@@ -68,6 +68,7 @@ const SENDPULSE_CLIENT_ID = process.env.SENDPULSE_CLIENT_ID || '';
 const SENDPULSE_CLIENT_SECRET = process.env.SENDPULSE_CLIENT_SECRET || '';
 const SENDPULSE_FROM_EMAIL = process.env.SENDPULSE_FROM_EMAIL || '';
 const SENDPULSE_FROM_NAME = process.env.SENDPULSE_FROM_NAME || 'The Courtyard';
+const BREVO_API_KEY = process.env.BREVO_API_KEY || '';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const SMTP_HOST = process.env.SMTP_HOST || '';
 const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
@@ -207,7 +208,33 @@ const sendOtpEmail = async (toEmail, otp) => {
     </div>
   `;
 
-  // --- Resend (primary: HTTP API, works on all cloud platforms) ---
+  // --- Brevo (primary: HTTP API, sends to any email, 300/day free) ---
+  if (BREVO_API_KEY) {
+    try {
+      const brevoRes = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'api-key': BREVO_API_KEY,
+        },
+        body: JSON.stringify({
+          sender: { name: 'The Courtyard', email: 'noreply@thecourtyard.in' },
+          to: [{ email: toEmail }],
+          subject,
+          htmlContent: html,
+          textContent: text,
+        }),
+      });
+      const brevoData = await brevoRes.json().catch(() => ({}));
+      if (!brevoRes.ok) throw new Error(brevoData.message || JSON.stringify(brevoData));
+      console.log(`Brevo OTP email sent to ${toEmail}`);
+      return true;
+    } catch (brevoErr) {
+      console.warn(`Brevo failed (${brevoErr.message}), trying Resend...`);
+    }
+  }
+
+  // --- Resend (secondary: free tier only sends to account email) ---
   if (RESEND_API_KEY) {
     try {
       const resend = new Resend(RESEND_API_KEY);
