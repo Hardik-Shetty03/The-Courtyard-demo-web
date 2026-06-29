@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
 const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 require('dotenv').config();
 
 // Models
@@ -67,6 +68,7 @@ const SENDPULSE_CLIENT_ID = process.env.SENDPULSE_CLIENT_ID || '';
 const SENDPULSE_CLIENT_SECRET = process.env.SENDPULSE_CLIENT_SECRET || '';
 const SENDPULSE_FROM_EMAIL = process.env.SENDPULSE_FROM_EMAIL || '';
 const SENDPULSE_FROM_NAME = process.env.SENDPULSE_FROM_NAME || 'The Courtyard';
+const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const SMTP_HOST = process.env.SMTP_HOST || '';
 const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
 const SMTP_SECURE = process.env.SMTP_SECURE === 'true';
@@ -205,27 +207,57 @@ const sendOtpEmail = async (toEmail, otp) => {
     </div>
   `;
 
+  // --- Resend (primary: HTTP API, works on all cloud platforms) ---
+  if (RESEND_API_KEY) {
+    try {
+      const resend = new Resend(RESEND_API_KEY);
+      const fromAddress = SMTP_FROM_EMAIL
+        ? `${SMTP_FROM_NAME} <${SMTP_FROM_EMAIL}>`
+        : 'The Courtyard <onboarding@resend.dev>';
+      const { error } = await resend.emails.send({
+        from: fromAddress,
+        to: [toEmail],
+        subject,
+        html,
+        text,
+      });
+      if (error) throw new Error(error.message || JSON.stringify(error));
+      console.log(`Resend OTP email sent to ${toEmail}`);
+      return true;
+    } catch (resendErr) {
+      console.warn(`Resend failed (${resendErr.message}), trying SMTP...`);
+    }
+  }
+
+  // --- SMTP fallback (works locally) ---
   if (SMTP_HOST && SMTP_USER && SMTP_PASS && SMTP_FROM_EMAIL) {
-    const transporter = nodemailer.createTransport({
-      host: SMTP_HOST,
-      port: SMTP_PORT,
-      secure: SMTP_SECURE,
-      auth: {
-        user: SMTP_USER,
-        pass: SMTP_PASS
-      }
-    });
+    try {
+      const transporter = nodemailer.createTransport({
+        host: SMTP_HOST,
+        port: SMTP_PORT,
+        secure: SMTP_SECURE,
+        auth: {
+          user: SMTP_USER,
+          pass: SMTP_PASS
+        },
+        connectionTimeout: 8000,
+        greetingTimeout: 8000,
+        socketTimeout: 8000,
+      });
 
-    await transporter.sendMail({
-      from: `"${SMTP_FROM_NAME}" <${SMTP_FROM_EMAIL}>`,
-      to: toEmail,
-      subject,
-      text,
-      html
-    });
+      await transporter.sendMail({
+        from: `"${SMTP_FROM_NAME}" <${SMTP_FROM_EMAIL}>`,
+        to: toEmail,
+        subject,
+        text,
+        html
+      });
 
-    console.log(`SMTP OTP email sent to ${toEmail}`);
-    return true;
+      console.log(`SMTP OTP email sent to ${toEmail}`);
+      return true;
+    } catch (smtpErr) {
+      console.warn(`SMTP failed (${smtpErr.message}), falling back to SendPulse...`);
+    }
   }
 
   if (!SENDPULSE_FROM_EMAIL) {
