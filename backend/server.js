@@ -211,11 +211,8 @@ const sendOtpEmail = async (toEmail, otp) => {
   if (RESEND_API_KEY) {
     try {
       const resend = new Resend(RESEND_API_KEY);
-      const fromAddress = SMTP_FROM_EMAIL
-        ? `${SMTP_FROM_NAME} <${SMTP_FROM_EMAIL}>`
-        : 'The Courtyard <onboarding@resend.dev>';
       const { error } = await resend.emails.send({
-        from: fromAddress,
+        from: 'The Courtyard <onboarding@resend.dev>',
         to: [toEmail],
         subject,
         html,
