@@ -48,10 +48,8 @@ services:
     plan: free
     rootDir: frontend
     buildCommand: npm install && npm run build
-    startCommand: npm run start
+    startCommand: npm run start -- -p $PORT
     envVars:
-      - key: PORT
-        value: 3000
       - key: NODE_ENV
         value: production
       - key: NEXT_PUBLIC_API_BASE_URL
