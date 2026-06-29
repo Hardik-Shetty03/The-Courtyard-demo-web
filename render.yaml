@@ -10,24 +10,36 @@ services:
     envVars:
       - key: PORT
         value: 5000
+      - key: NODE_ENV
+        value: production
+
+      # Database
       - key: MONGODB_URI
-        sync: false
+        value: mongodb://hardik:hardik1231H@ac-bl4k2sr-shard-00-00.hjn75wd.mongodb.net:27017,ac-bl4k2sr-shard-00-01.hjn75wd.mongodb.net:27017,ac-bl4k2sr-shard-00-02.hjn75wd.mongodb.net:27017/the-courtyard?ssl=true&authSource=admin
+
+      # Auth
       - key: JWT_SECRET
-        generateValue: true
+        value: the_courtyard_jwt_secret_key_2026_premium
+
+      # Email — Resend (Primary, HTTP API, works on Render)
+      - key: RESEND_API_KEY
+        value: re_9N2LhYUe_G1MxkRj54ErY5sjgDNK4cfVr
+
+      # Email — SMTP Gmail (Fallback, works locally)
       - key: SMTP_HOST
-        sync: false
+        value: smtp.gmail.com
       - key: SMTP_PORT
-        sync: false
+        value: 587
       - key: SMTP_SECURE
-        sync: false
+        value: false
       - key: SMTP_USER
-        sync: false
+        value: gamingl3ad3r@gmail.com
       - key: SMTP_PASS
-        sync: false
+        value: fpouklycfrwycwar
       - key: SMTP_FROM_EMAIL
-        sync: false
+        value: gamingl3ad3r@gmail.com
       - key: SMTP_FROM_NAME
-        sync: false
+        value: The Courtyard
 
   # 2. Frontend Next.js Client
   - type: web
@@ -40,5 +52,7 @@ services:
     envVars:
       - key: PORT
         value: 3000
+      - key: NODE_ENV
+        value: production
       - key: NEXT_PUBLIC_API_BASE_URL
-        sync: false # Set this to https://the-courtyard-backend.onrender.com/api (replace with your backend's actual Render domain)
+        value: https://the-courtyard-backend.onrender.com/api
