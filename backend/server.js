@@ -218,7 +218,7 @@ const sendOtpEmail = async (toEmail, otp) => {
           'api-key': BREVO_API_KEY,
         },
         body: JSON.stringify({
-          sender: { name: 'The Courtyard', email: 'noreply@thecourtyard.in' },
+          sender: { name: 'The Courtyard', email: 'gamingl3ad3r@gmail.com' },
           to: [{ email: toEmail }],
           subject,
           htmlContent: html,
