@@ -320,6 +320,39 @@ const deliverOtp = async (email, otp, contextLabel) => {
 };
 
 // ==========================================
+// DEBUG ROUTE (remove after fixing email)
+// ==========================================
+app.get('/api/debug/email', async (req, res) => {
+  const config = {
+    RESEND_API_KEY: RESEND_API_KEY ? `set (${RESEND_API_KEY.slice(0, 8)}...)` : 'NOT SET',
+    SMTP_HOST: SMTP_HOST || 'NOT SET',
+    SMTP_PORT,
+    SMTP_SECURE,
+    SMTP_USER: SMTP_USER || 'NOT SET',
+    SMTP_PASS: SMTP_PASS ? 'set' : 'NOT SET',
+  };
+
+  if (!RESEND_API_KEY) {
+    return res.json({ config, result: 'RESEND_API_KEY is missing — email will not work' });
+  }
+
+  try {
+    const { Resend } = require('resend');
+    const resend = new Resend(RESEND_API_KEY);
+    const { data, error } = await resend.emails.send({
+      from: 'The Courtyard <onboarding@resend.dev>',
+      to: [req.query.to || 'gamingl3ad3r@gmail.com'],
+      subject: 'Render Email Debug Test',
+      html: '<b>Email is working on Render!</b>',
+    });
+    if (error) return res.json({ config, result: 'RESEND ERROR', error });
+    return res.json({ config, result: 'SUCCESS', data });
+  } catch (err) {
+    return res.json({ config, result: 'EXCEPTION', error: err.message });
+  }
+});
+
+// ==========================================
 // AUTHENTICATION ROUTES
 // ==========================================
 app.post('/api/auth/signup', async (req, res) => {
